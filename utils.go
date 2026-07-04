@@ -114,7 +114,6 @@ func calculateDeltaMatrix(includeIgnored bool) (map[string]FileMeta, map[string]
 
 	return currentFilesState, changesMap
 }
-
 func isIgnored(relPath string, patterns []string) bool {
 	if relPath == "." || relPath == "" {
 		return false
@@ -127,20 +126,21 @@ func isIgnored(relPath string, patterns []string) bool {
 		if pattern == "" || strings.HasPrefix(pattern, "#") {
 			continue
 		}
-		pattern = filepath.ToSlash(pattern)
+		
+		// Normalize rules by stripping trailing slashes
+		pattern = filepath.ToSlash(strings.TrimSuffix(pattern, "/"))
 
-		if strings.HasSuffix(pattern, "/") {
-			cleanDir := strings.TrimSuffix(pattern, "/")
-			if targetPath == cleanDir || strings.HasPrefix(targetPath, pattern) || strings.Contains(targetPath, "/"+pattern) {
-				return true
-			}
-		} else {
-			if targetPath == pattern || filepath.Base(targetPath) == pattern {
-				return true
-			}
-			if match, _ := filepath.Match(pattern, filepath.Base(targetPath)); match {
-				return true
-			}
+		// Check if the path is an exact match or resides inside an excluded folder tree
+		if targetPath == pattern || 
+		   strings.HasPrefix(targetPath, pattern+"/") || 
+		   strings.Contains(targetPath, "/"+pattern+"/") || 
+		   strings.HasSuffix(targetPath, "/"+pattern) {
+			return true
+		}
+
+		// Handle standalone wildcard filename filters (e.g., *.log, .DS_Store)
+		if match, _ := filepath.Match(pattern, filepath.Base(targetPath)); match {
+			return true
 		}
 	}
 	return false
@@ -289,7 +289,10 @@ func loadTargets(path string) (map[string]string, error) {
 	return m, nil
 }
 
-func saveTargets(path string, m map[string]string) error {
-	b, _ := json.MarshalIndent(m, "", "  ")
-	return os.WriteFile(path, b, 0644)
+func saveTargets(path string, targets map[string]string) error {
+	data, err := json.MarshalIndent(targets, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0644)
 }
