@@ -75,30 +75,33 @@ func parseTargetURI(dest string) StorageClient {
 }
 
 // SAFETY CHECK: Validates reachability to prevent devastating data corruption loops
+// SAFETY CHECK: Validates reachability to prevent devastating data corruption loops
 func isTargetReachable(client StorageClient) bool {
 	switch client.Protocol {
 	case "local":
-		if _, err := os.Stat(client.RawPath); err != nil {
-			if os.IsNotExist(err) {
-				// If the folder itself doesn't exist, verify its parent folder exists.
-				// This distinguishes a new folder setup from an unmounted network volume.
-				parent := filepath.Dir(client.RawPath)
-				if _, pErr := os.Stat(parent); pErr != nil {
-					return false // Parent is missing or unreachable; safe skip triggered
-				}
-				return true // Valid uninitialized local subdirectory folder path
+		if _, err := os.Stat(client.RawPath); err == nil {
+			return true // Path exists and is fully responsive
+		} else if os.IsNotExist(err) {
+			// DEFENSIVE CHECK: Intercept removable/network media mount lines.
+			// If a subfolder inside these blocks is missing, the device is pulled/unmounted.
+			p := client.RawPath
+			if strings.HasPrefix(p, "/run/media/") || strings.HasPrefix(p, "/media/") || strings.HasPrefix(p, "/mnt/") {
+				return false // Safely reject unmounted USB endpoints
 			}
-			return false // Permission denied or hardware device disconnected error
+
+			// For standard permanent disk targets, we can still fall back to parent checks
+			parent := filepath.Dir(p)
+			if _, pErr := os.Stat(parent); pErr == nil {
+				return true // Legitimate brand-new uninitialized local workspace subdirectory
+			}
 		}
-		return true
+		return false // Catch permission blocks or missing parent parameters
 
 	case "sftp":
-		// Probe remote host reachability with a strict 3-second connection timeout limit
 		cmd := exec.Command("ssh", "-o", "ConnectTimeout=3", "-o", "BatchMode=yes", client.Host, "mkdir -p "+client.RemoteDir)
 		return cmd.Run() == nil
 
 	case "ftp":
-		// Query the FTP directory listing index via curl to confirm connection stability
 		cmd := exec.Command("curl", "--connect-timeout", "3", "--silent", "--fail", client.RemoteDir+"/")
 		return cmd.Run() == nil
 	}
