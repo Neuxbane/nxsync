@@ -5,12 +5,166 @@ import (
 	"crypto/md5"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 )
+
+type IgnoreRule struct {
+	Pattern    string
+	Type       string // "file", "dir", or ""
+	MaxBytes   int64  // -1 means no size restriction assigned
+	IsExtended bool
+}
+
+// Converts standard byte threshold representations (B, KB, MB, GB) to raw int64 bytes
+func parseSizeLimit(s string) int64 {
+	s = strings.ToUpper(strings.TrimSpace(s))
+	var multiplier int64 = 1
+	if strings.HasSuffix(s, "GB") {
+		multiplier = 1024 * 1024 * 1024
+		s = strings.TrimSuffix(s, "GB")
+	} else if strings.HasSuffix(s, "MB") {
+		multiplier = 1024 * 1024
+		s = strings.TrimSuffix(s, "MB")
+	} else if strings.HasSuffix(s, "KB") {
+		multiplier = 1024
+		s = strings.TrimSuffix(s, "KB")
+	} else if strings.HasSuffix(s, "B") {
+		s = strings.TrimSuffix(s, "B")
+	}
+	var val int64
+	_, _ = fmt.Sscanf(s, "%d", &val)
+	return val * multiplier
+}
+
+// Parses extended token configuration attributes line-by-line
+func parseIgnoreRules(lines []string) []IgnoreRule {
+	var rules []IgnoreRule
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.Fields(line)
+		if len(parts) == 0 {
+			continue
+		}
+		rule := IgnoreRule{
+			Pattern:  parts[0],
+			MaxBytes: -1,
+		}
+		if len(parts) > 1 {
+			rule.IsExtended = true
+			for _, part := range parts[1:] {
+				if strings.HasPrefix(part, "type=") {
+					rule.Type = strings.TrimPrefix(part, "type=")
+				} else if strings.HasPrefix(part, "max=") {
+					rule.MaxBytes = parseSizeLimit(strings.TrimPrefix(part, "max="))
+				}
+			}
+		}
+		rules = append(rules, rule)
+	}
+	return rules
+}
+
+// Evaluates whether a directory or file node meets current exclusion constraints
+func shouldIgnorePath(relPath string, isDir bool, size int64, rules []IgnoreRule) bool {
+	if relPath == "." || relPath == "" {
+		return false
+	}
+	targetPath := filepath.ToSlash(relPath)
+
+	for _, rule := range rules {
+		// Enforce optional type constraint checks
+		if rule.Type == "file" && isDir {
+			continue
+		}
+		if rule.Type == "dir" && !isDir {
+			continue
+		}
+
+		matched := false
+		p := filepath.ToSlash(strings.TrimSuffix(rule.Pattern, "/"))
+
+		if p == "*" {
+			matched = true
+		} else if targetPath == p || strings.HasPrefix(targetPath, p+"/") || strings.Contains(targetPath, "/"+p+"/") || strings.HasSuffix(targetPath, "/"+p) {
+			matched = true
+		} else if match, _ := filepath.Match(p, targetPath); match {
+			matched = true
+		} else if match, _ := filepath.Match(p, filepath.Base(targetPath)); match {
+			matched = true
+		}
+
+		if matched {
+			if rule.MaxBytes == -1 {
+				return true // Absolute exclusion
+			}
+			if size > rule.MaxBytes {
+				return true // Limit exceeded
+			}
+		}
+	}
+	return false
+}
+
+// Scans active safe paths to compute folder accumulation limits before running matrix comparisons
+func precalculateFolderSizes(safePaths []string) (map[string]int64, map[string]int64) {
+	fileSizes := make(map[string]int64)
+	folderSizes := make(map[string]int64)
+	absCwd, err := filepath.Abs(".")
+	if err != nil {
+		return fileSizes, folderSizes
+	}
+
+	for _, root := range safePaths {
+		root = strings.TrimSpace(root)
+		if root == "" || strings.HasPrefix(root, "#") {
+			continue
+		}
+		if _, err := os.Stat(root); os.IsNotExist(err) {
+			continue
+		}
+		absRoot, err := filepath.Abs(root)
+		if err != nil {
+			continue
+		}
+
+		_ = filepath.WalkDir(absRoot, func(path string, d os.DirEntry, err error) error {
+			if err != nil || d.IsDir() {
+				return nil
+			}
+			absPath, _ := filepath.Abs(path)
+			relPath, err := filepath.Rel(absCwd, absPath)
+			if err != nil {
+				return nil
+			}
+
+			info, err := d.Info()
+			if err != nil {
+				return nil
+			}
+
+			sz := info.Size()
+			fileSizes[relPath] = sz
+
+			// Dynamically bubble-up size allocations into parent directories
+			parent := filepath.Dir(relPath)
+			for parent != "." && parent != "/" && parent != "" {
+				folderSizes[parent] += sz
+				parent = filepath.Dir(parent)
+			}
+			folderSizes["."] += sz
+			return nil
+		})
+	}
+	return fileSizes, folderSizes
+}
 
 func calculateDeltaMatrix(includeIgnored bool) (map[string]FileMeta, map[string]Change) {
 	safePaths, _ := readLines(SafeConf)
@@ -24,6 +178,10 @@ func calculateDeltaMatrix(includeIgnored bool) (map[string]FileMeta, map[string]
 	if err != nil {
 		return currentFilesState, changesMap
 	}
+
+	// Generate lookup size boundaries and transform rule maps
+	fileSizes, folderSizes := precalculateFolderSizes(safePaths)
+	rules := parseIgnoreRules(ignorePatterns)
 
 	for _, root := range safePaths {
 		root = strings.TrimSpace(root)
@@ -61,16 +219,24 @@ func calculateDeltaMatrix(includeIgnored bool) (map[string]FileMeta, map[string]
 				return nil
 			}
 
-			ignored := isIgnored(relPath, ignorePatterns)
+			isDir := d.IsDir()
+			var currentSize int64
+			if isDir {
+				currentSize = folderSizes[relPath]
+			} else {
+				currentSize = fileSizes[relPath]
+			}
+
+			ignored := shouldIgnorePath(relPath, isDir, currentSize, rules)
 			
 			if ignored && !includeIgnored {
-				if d.IsDir() {
-					return filepath.SkipDir
+				if isDir {
+					return filepath.SkipDir // Optimize performance by skipping oversized sub-trees
 				}
 				return nil
 			}
 
-			if d.IsDir() {
+			if isDir {
 				return nil
 			}
 
@@ -114,36 +280,10 @@ func calculateDeltaMatrix(includeIgnored bool) (map[string]FileMeta, map[string]
 
 	return currentFilesState, changesMap
 }
+
 func isIgnored(relPath string, patterns []string) bool {
-	if relPath == "." || relPath == "" {
-		return false
-	}
-
-	targetPath := filepath.ToSlash(relPath)
-
-	for _, pattern := range patterns {
-		pattern = strings.TrimSpace(pattern)
-		if pattern == "" || strings.HasPrefix(pattern, "#") {
-			continue
-		}
-		
-		// Normalize rules by stripping trailing slashes
-		pattern = filepath.ToSlash(strings.TrimSuffix(pattern, "/"))
-
-		// Check if the path is an exact match or resides inside an excluded folder tree
-		if targetPath == pattern || 
-		   strings.HasPrefix(targetPath, pattern+"/") || 
-		   strings.Contains(targetPath, "/"+pattern+"/") || 
-		   strings.HasSuffix(targetPath, "/"+pattern) {
-			return true
-		}
-
-		// Handle standalone wildcard filename filters (e.g., *.log, .DS_Store)
-		if match, _ := filepath.Match(pattern, filepath.Base(targetPath)); match {
-			return true
-		}
-	}
-	return false
+	rules := parseIgnoreRules(patterns)
+	return shouldIgnorePath(relPath, false, 0, rules)
 }
 
 func pruneEmptyDirs(base, relDir string) {
@@ -196,7 +336,6 @@ func readLines(path string) ([]string, error) {
 	return lines, nil
 }
 
-// UPGRADED: Decodes custom binary schema file containing 16-byte MD5 path checksum blocks
 func loadSnapshot(path string) (map[string]FileMeta, error) {
 	m := make(map[string]FileMeta)
 	f, err := os.Open(path)
@@ -249,7 +388,6 @@ func loadSnapshot(path string) (map[string]FileMeta, error) {
 	return m, nil
 }
 
-// UPGRADED: Serializes metadata into low-level binary streams utilizing fixed 16-byte hashes
 func saveSnapshot(path string, m map[string]FileMeta) error {
 	f, err := os.Create(path)
 	if err != nil {
@@ -262,7 +400,7 @@ func saveSnapshot(path string, m map[string]FileMeta) error {
 	}
 
 	for relPath, meta := range m {
-		hash := md5.Sum([]byte(relPath)) // Path conversion into fixed length of 16-bytes
+		hash := md5.Sum([]byte(relPath))
 		if _, err := f.Write(hash[:]); err != nil {
 			return err
 		}
@@ -289,10 +427,7 @@ func loadTargets(path string) (map[string]string, error) {
 	return m, nil
 }
 
-func saveTargets(path string, targets map[string]string) error {
-	data, err := json.MarshalIndent(targets, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, data, 0644)
+func saveTargets(path string, m map[string]string) error {
+	b, _ := json.MarshalIndent(m, "", "  ")
+	return os.WriteFile(path, b, 0644)
 }

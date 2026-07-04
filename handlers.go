@@ -162,9 +162,47 @@ func handleInit() {
 	}
 
 	_ = os.MkdirAll(StateDir, 0755)
-	_ = os.WriteFile(SafeConf, []byte("# Root directory boundaries to track. '.' maps to workspace root.\n.\n"), 0644)
-	_ = os.WriteFile(IgnoreConf, []byte("# Explicit patterns to exclude from sync routines\n.git/\n"), 0644)
-	_ = saveSnapshot(CommitDB, make(map[string]FileMeta)) // Seed blank binary ledger block
+
+	// Seeding structural safe boundaries documentation
+	safeConfTemplate := `# ============================================================
+# nxsync safe.conf - Directory Boundary Layout Configuration
+# ============================================================
+# Dictates structural directory fields permitted to be scanned.
+# Define one boundary entry per line. '.' targets workspace root.
+
+.
+`
+	_ = os.WriteFile(SafeConf, []byte(safeConfTemplate), 0644)
+
+	// Seeding comprehensive extended constraint examples 
+	ignoreConfTemplate := `# ============================================================
+# nxsync ignore.conf - Size Constraint & Structural Ignore Rules
+# ============================================================
+# Syntax: <pattern> [type=file|dir] [max=<size>]
+# Supported size allocation suffix scales: B, KB, MB, GB
+
+# --- Tier 1: System Level Exclusions (Absolute Rules) ---
+.git/
+.nxsync/
+
+# --- Tier 2: Global Sizing Thresholds (Accumulative Safeguards) ---
+# Limits unmatched individual files or full directory spaces to 10MB
+* max=10MB
+
+# --- Tier 3: Selective Single-Layer Filters ---
+# Caps individual files immediately sitting inside 'apps' folder to 10MB
+apps/* type=file max=10MB
+
+# --- Tier 4: Cascading Multi-Layer Subfolder Balancers ---
+# Restricts total directory accumulation for any sub-app layout down to 100MB
+apps/*/* max=100MB
+
+# --- Tier 5: Volatile Local Dependencies Sizing Filters ---
+# Bypasses node_modules folders entirely if their content weight exceeds 1MB
+node_modules max=1MB
+`
+	_ = os.WriteFile(IgnoreConf, []byte(ignoreConfTemplate), 0644)
+	_ = saveSnapshot(CommitDB, make(map[string]FileMeta)) 
 	_ = os.WriteFile(TargetsConf, []byte("{}"), 0644)
 
 	pwd, _ := os.Getwd()

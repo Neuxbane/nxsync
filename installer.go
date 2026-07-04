@@ -69,8 +69,6 @@ func ensureInstalled() {
 		}
 		
 		fmt.Println("\n[+] Success! Global binary overwritten and updated successfully.")
-		fmt.Println("[!] Access blocked through relative path executions. Please use the global command directly:")
-		fmt.Println("    -> nxsync <command>")
 		os.Exit(0) // Exit cleanly immediately without evaluating downstream router commands
 	}
 }
