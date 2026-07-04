@@ -177,7 +177,7 @@ func handleTarget(args []string) {
 }
 
 func handlePreview() {
-	currentFilesState, changesMap := calculateDeltaMatrix(true)
+	currentFilesState, changesMap := calculateDeltaMatrix(false) 
 	rootTree := &TreePath{Children: make(map[string]*TreePath)}
 
 	addIntoTree := func(relPath string) {
