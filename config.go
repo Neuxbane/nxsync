@@ -25,6 +25,7 @@ type FileMeta struct {
 	Size      int64       `json:"size"`
 	Timestamp int64       `json:"timestamp"` 
 	Mode      os.FileMode `json:"mode"`
+	IsDeleted bool        `json:"isDeleted"`
 }
 
 const (

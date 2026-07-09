@@ -369,6 +369,10 @@ func loadSnapshot(path string) (map[string]FileMeta, error) {
 		if err := binary.Read(f, binary.LittleEndian, &mode); err != nil {
 			return m, err
 		}
+		var isDeleted bool
+		if err := binary.Read(f, binary.LittleEndian, &isDeleted); err != nil {
+			return m, err
+		}
 		var pathLen uint16
 		if err := binary.Read(f, binary.LittleEndian, &pathLen); err != nil {
 			return m, err
@@ -383,6 +387,7 @@ func loadSnapshot(path string) (map[string]FileMeta, error) {
 			Size:      size,
 			Timestamp: timestamp,
 			Mode:      os.FileMode(mode),
+			IsDeleted: isDeleted,
 		}
 	}
 	return m, nil
@@ -407,6 +412,7 @@ func saveSnapshot(path string, m map[string]FileMeta) error {
 		_ = binary.Write(f, binary.LittleEndian, meta.Size)
 		_ = binary.Write(f, binary.LittleEndian, meta.Timestamp)
 		_ = binary.Write(f, binary.LittleEndian, uint32(meta.Mode))
+		_ = binary.Write(f, binary.LittleEndian, meta.IsDeleted)
 		
 		pathBytes := []byte(relPath)
 		_ = binary.Write(f, binary.LittleEndian, uint16(len(pathBytes)))
@@ -430,4 +436,48 @@ func loadTargets(path string) (map[string]string, error) {
 func saveTargets(path string, m map[string]string) error {
 	b, _ := json.MarshalIndent(m, "", "  ")
 	return os.WriteFile(path, b, 0644)
+}
+
+func commitSinglePath(relPath string) error {
+	snapshot, err := loadSnapshot(CommitDB)
+	if err != nil {
+		return err
+	}
+
+	ignorePatterns, _ := readLines(IgnoreConf)
+	if isIgnored(relPath, ignorePatterns) {
+		delete(snapshot, relPath)
+		return saveSnapshot(CommitDB, snapshot)
+	}
+
+	absCwd, err := filepath.Abs(".")
+	if err != nil {
+		return err
+	}
+
+	fullPath := filepath.Join(absCwd, relPath)
+	info, err := os.Stat(fullPath)
+
+	if os.IsNotExist(err) {
+		snapshot[relPath] = FileMeta{
+			Size:      0,
+			Timestamp: time.Now().Unix(),
+			Mode:      0,
+			IsDeleted: true,
+		}
+	} else if err != nil {
+		return err
+	} else {
+		if info.IsDir() {
+			return nil
+		}
+		snapshot[relPath] = FileMeta{
+			Size:      info.Size(),
+			Timestamp: time.Now().Unix(),
+			Mode:      info.Mode(),
+			IsDeleted: false,
+		}
+	}
+
+	return saveSnapshot(CommitDB, snapshot)
 }

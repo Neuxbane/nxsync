@@ -845,14 +845,23 @@ func handleSync(args []string, interactive bool, pushOnly bool) {
 				continue
 			}
 
-			lMeta, lHasLive := localLive[path]
-			_, lHasSnap := localSnapshot[path]
+			lMeta, lHasSnap := localSnapshot[path]
 			tMeta, tHasSnap := targetSnapshot[path]
 
-			if lHasLive && tHasSnap {
+			if lHasSnap && tHasSnap {
+				if lMeta.IsDeleted || tMeta.IsDeleted {
+					if lMeta.IsDeleted && !tMeta.IsDeleted {
+						actions[path] = DeleteTarget
+					} else if !lMeta.IsDeleted && tMeta.IsDeleted {
+						actions[path] = DeleteLocal
+					}
+					continue
+				}
+
 				if lMeta.Size == tMeta.Size && lMeta.Mode == tMeta.Mode {
 					continue
 				}
+
 				if lMeta.Timestamp > tMeta.Timestamp {
 					actions[path] = PushToTarget
 				} else if tMeta.Timestamp > lMeta.Timestamp {
@@ -861,20 +870,20 @@ func handleSync(args []string, interactive bool, pushOnly bool) {
 				continue
 			}
 
-			if !lHasLive && tHasSnap {
-				if lHasSnap {
-					actions[path] = DeleteTarget 
+			if !lHasSnap && tHasSnap {
+				if tMeta.IsDeleted {
+					continue
 				} else {
-					actions[path] = PullToLocal  
+					actions[path] = PullToLocal
 				}
 				continue
 			}
 
-			if lHasLive && !tHasSnap {
-				if !lHasSnap {
-					actions[path] = PushToTarget 
+			if lHasSnap && !tHasSnap {
+				if lMeta.IsDeleted {
+					continue
 				} else {
-					actions[path] = DeleteLocal  
+					actions[path] = PushToTarget
 				}
 				continue
 			}

@@ -12,7 +12,7 @@ import (
 	"github.com/fsnotify/fsnotify"
 )
 
-func handleDaemon() {
+func handleDaemon(autoSync bool) {
 	fmt.Println("[*] nxsync daemon: Starting background synchronization watcher...")
 	
 	watcher, err := fsnotify.NewWatcher()
@@ -91,8 +91,21 @@ func handleDaemon() {
 				timer = time.AfterFunc(debounce, func() {
 					syncMu.Lock()
 					defer syncMu.Unlock()
-					fmt.Printf("\n[!] Change detected at %s (%v). Triggering auto-sync (Push-Only)...\n", event.Name, event.Op)
-					handleSync([]string{"all"}, false, true)
+					
+					absCwd, _ := filepath.Abs(".")
+					relPath, err := filepath.Rel(absCwd, event.Name)
+					if err != nil {
+						fmt.Printf("[!] Error calculating relative path for %s: %v\n", event.Name, err)
+						return
+					}
+					
+					fmt.Printf("\n[!] Change detected at %s (%v). Recording commit...\n", relPath, event.Op)
+					if err := commitSinglePath(relPath); err != nil {
+						fmt.Printf("[!] Error committing path %s: %v\n", relPath, err)
+					} else if autoSync {
+						fmt.Println("[*] Auto-syncing changes to targets...")
+						handleSync([]string{}, false, false)
+					}
 				})
 				mu.Unlock()
 			}

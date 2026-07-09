@@ -39,7 +39,7 @@ func main() {
 		handleSync(os.Args[2:], true, false)
 	case "daemon":
 		assertInWorkspace()
-		handleDaemon()
+		handleDaemon(len(os.Args) > 2 && os.Args[2] == "sync")
 	default:
 		fmt.Printf("nxsync: '%s' is not an nxsync command. See 'nxsync --help'.\n\n", os.Args[1])
 		printUsage()
@@ -65,7 +65,8 @@ func printUsage() {
 	fmt.Println("   sync all             Validate modifications and replicate across ALL target ledgers")
 	fmt.Println("   sync <target-name>    Validate modifications and execute push sync routines to target\n")
 	fmt.Println("background automation")
-	fmt.Println("   daemon                Start a background watcher that auto-syncs changes")
+	fmt.Println("   daemon                Start a background watcher that records changes in real-time")
+	fmt.Println("   daemon sync           Trigger manual synchronization while daemon is running")
 }
 
 func printVersion() {
