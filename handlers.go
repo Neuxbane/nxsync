@@ -735,7 +735,7 @@ func handlePreview() {
 	fmt.Println("[*] Preview unmounted cleanly.")
 }
 
-func handleSync(args []string) {
+func handleSync(args []string, interactive bool, pushOnly bool) {
 	targets, _ := loadTargets(TargetsConf)
 	if len(targets) == 0 {
 		fmt.Fprintln(os.Stderr, "Fatal: No sync target destinations are registered inside .nxsync/targets.json")
@@ -887,7 +887,9 @@ func handleSync(args []string) {
 	}
 
 	if !hasAnyActions {
-		fmt.Println("[*] All target configurations are perfectly synchronized with commit.bin ledgers.")
+		if interactive {
+			fmt.Println("[*] All target configurations are perfectly synchronized with commit.bin ledgers.")
+		}
 		return
 	}
 
@@ -898,7 +900,9 @@ func handleSync(args []string) {
 
 	if totalActions >= 20 {
 		logPath := filepath.Join(StateDir, "changes.log")
-		fmt.Printf("\n[!] Global Multi-Target Sync Plan Compiled with %d actions. Writing details to %s instead of terminal.\n", totalActions, logPath)
+		if interactive {
+			fmt.Printf("\n[!] Global Multi-Target Sync Plan Compiled with %d actions. Writing details to %s instead of terminal.\n", totalActions, logPath)
+		}
 		
 		var logLines []string
 		logLines = append(logLines, "[*] Global Multi-Target Sync Plan Compiled:")
@@ -910,17 +914,21 @@ func handleSync(args []string) {
 		}
 		_ = os.WriteFile(logPath, []byte(strings.Join(logLines, "\n")+"\n"), 0644)
 	} else {
-		fmt.Println("\n[*] Global Multi-Target Sync Plan Compiled:")
-		for name, plan := range allPlans {
-			fmt.Printf("\nTarget Location [%s] -> %s:\n", name, plan.Dest)
-			for path, action := range plan.Actions {
-				fmt.Printf("   [%s] %s\n", action, path)
+		if interactive {
+			fmt.Println("\n[*] Global Multi-Target Sync Plan Compiled:")
+			for name, plan := range allPlans {
+				fmt.Printf("\nTarget Location [%s] -> %s:\n", name, plan.Dest)
+				for path, action := range plan.Actions {
+					fmt.Printf("   [%s] %s\n", action, path)
+				}
 			}
 		}
 	}
 
-	fmt.Print("\nPress [ENTER] to execute all planned changes across workspace boundaries, or [CTRL+C] to abort...")
-	_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
+	if interactive {
+		fmt.Print("\nPress [ENTER] to execute all planned changes across workspace boundaries, or [CTRL+C] to abort...")
+		_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -943,7 +951,9 @@ func handleSync(args []string) {
 		}
 
 		client := targetClients[name]
-		fmt.Printf("[*] Synchronizing target pipeline context [%s]...\n", name)
+		if interactive {
+			fmt.Printf("[*] Synchronizing target pipeline context [%s]...\n", name)
+		}
 		
 		// Fetch snapshot memory references over local/remote configurations
 		targetCommitDB := filepath.Join(client.RawPath, CommitDB)
@@ -982,6 +992,7 @@ func handleSync(args []string) {
 		startTime := time.Now()         
 
 		renderPacmanGrid := func() {
+			if !interactive { return }
 			mu.Lock()
 			defer mu.Unlock()
 
@@ -1253,7 +1264,9 @@ func handleSync(args []string) {
 				}
 				_ = os.Remove(tempLocalDB)
 			}
-			fmt.Printf("[+] Target [%s] unified successfully.\n", name)
+			if interactive {
+				fmt.Printf("[+] Target [%s] unified successfully.\n", name)
+			}
 		}
 	}
 
@@ -1263,6 +1276,8 @@ func handleSync(args []string) {
 		fmt.Fprintln(os.Stderr, "\n[!] Operation aborted mid-execution by user. Safe states maintained.")
 		os.Exit(130)
 	} else {
-		fmt.Println("[*] Multi-source synchronization loop successfully completed.")
+		if interactive {
+			fmt.Println("[*] Multi-source synchronization loop successfully completed.")
+		}
 	}
 }
